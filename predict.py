@@ -10,14 +10,23 @@ Target-agnostic: the ``model:`` architecture block in every shipped
 checkpoint file and ``target`` name differ — see ``config/finetune.yml``'s own
 comment listing every dataset's targets), so nothing here hardcodes a target.
 
-IMPORTANT — output is an UNCALIBRATED, RELATIVE score, not a physical unit.
-``finetune.py``'s own ``pred_fn`` does ``pred * std + mean`` to report real
-units, but ``mean``/``std`` are computed from that target's JARVIS/MP TRAIN
-SPLIT at training time and are not stored in the checkpoint — there is no way
-to recover them from the checkpoint alone. Since ``std > 0`` this is a fixed
-monotonic affine transform, so ranking/argmin across a set of candidates is
-unaffected — but never report this number as eV/atom (or any other physical
-unit) unless you separately source that target's real train-split mean/std.
+IMPORTANT -- raw output is a Z-SCORE, not a physical unit. ``finetune.py`` trains
+with ``normalize: True``, so the head regresses ``(y - mean) / std`` where
+``mean``/``std`` come from that target's TRAIN SPLIT (``utils/dataset.py:307``).
+``finetune.py:126-127`` un-normalizes with ``pred * std + mean`` to report real
+units, but it reads those constants off the live datawrapper -- they are never
+serialized, and every ``ckpt/finetuned/*/*.pt`` here is a bare ``state_dict``.
+
+Since ``std > 0`` this is a fixed monotonic affine transform, so ranking / argmin
+across candidates is unaffected. Do NOT report this number as eV without
+converting it first.
+
+The constants ARE recoverable for the JARVIS (``dft_3d``) targets -- run
+``recover_calibration.py``, which replays the deterministic filter+shuffle+slice
+from public data and validates the result by reconstructing ``config/finetune.yml``'s
+own split sizes. Recovered values live in ``mgt_calibration.json``; convert with
+``y = z * std + mean``.
+
 """
 from __future__ import annotations
 
