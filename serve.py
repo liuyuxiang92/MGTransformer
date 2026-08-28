@@ -11,7 +11,9 @@ may issue thousands of calls across a method/budget/seed sweep.
 Protocol (line-delimited, stdout is JSON-only — nothing else may write there):
 
 * Startup: once the model is loaded, writes one line to stdout:
-  ``{"status": "ready"}``
+  ``{"status": "ready", "ckpt": ..., "calibrated": true|false}``.
+  ``calibrated`` reports whether ``score`` is in real units (eV / eV per atom) or
+  a raw z-score -- see ``predict.py``'s module docstring.
 * Per request: caller writes one POSCAR/CONTCAR path per line to stdin.
 * Per response: writes one line to stdout, either
   ``{"score": <float>}`` or, if that structure failed (e.g. unreadable POSCAR),
@@ -36,8 +38,10 @@ from predict import MGTPredictor
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--target", required=True,
-                    help="Finetuned checkpoint name under ckpt/finetuned/.")
+    p.add_argument("--target", default=None,
+                    help="Finetuned checkpoint name under ckpt/finetuned/. Optional "
+                         "when --ckpt is given: the target (and hence the calibration "
+                         "entry) is read off the checkpoint path.")
     p.add_argument("--ckpt", default=None)
     p.add_argument("--config", default=None)
     p.add_argument("--device", default="cpu")
@@ -46,7 +50,12 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--atom-features", default="cgcnn")
     p.add_argument("--triplet-endpoint", default="dst", choices=["dst", "src"])
     p.add_argument("--triplet-pad-mode", default="repeat", choices=["repeat", "zero"])
-    return p.parse_args()
+    p.add_argument("--raw", action="store_true",
+                    help="Emit uncalibrated z-scores instead of real units.")
+    args = p.parse_args()
+    if not args.target and not args.ckpt:
+        p.error("give --target (a name under ckpt/finetuned/) or --ckpt (a path).")
+    return args
 
 
 def main() -> None:
@@ -60,10 +69,15 @@ def main() -> None:
     )
     predictor = MGTPredictor(
         args.target, ckpt_path=args.ckpt, config_path=args.config,
-        device=args.device, graph_kwargs=graph_kwargs,
+        device=args.device, graph_kwargs=graph_kwargs, calibrate=not args.raw,
     )
 
-    sys.stdout.write(json.dumps({"status": "ready", "ckpt": predictor.ckpt_path}) + "\n")
+    sys.stdout.write(json.dumps({
+        "status": "ready",
+        "ckpt": predictor.ckpt_path,
+        # Consumers can assert they are getting the units they expect.
+        "calibrated": predictor.calibration is not None,
+    }) + "\n")
     sys.stdout.flush()
 
     for line in sys.stdin:
